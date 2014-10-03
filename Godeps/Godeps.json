@@ -1,0 +1,26 @@
+{
+	"ImportPath": "github.com/remind101/tap",
+	"GoVersion": "go1.3",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "code.google.com/p/go-uuid/uuid",
+			"Comment": "null-12",
+			"Rev": "7dda39b2e7d5e265014674c5af696ba4186679e9"
+		},
+		{
+			"ImportPath": "github.com/remind101/amqp",
+			"Rev": "e39fbc57fc59f0733ecaacd51f1717541dab6549"
+		},
+		{
+			"ImportPath": "github.com/remind101/metrics",
+			"Rev": "170e827fa8726d3a622817b38f6e1c0b0ab79b36"
+		},
+		{
+			"ImportPath": "github.com/streadway/amqp",
+			"Rev": "7d6d1802c7710be39564a287f860360c6328f956"
+		}
+	]
+}
