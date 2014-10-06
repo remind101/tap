@@ -13,17 +13,19 @@ import (
 
 // ErrorHandler is an interface for draining errors to an exceptions aggregator.
 type ErrorHandler interface {
-	Notify(error) error
+	Handle(error) error
 }
 
-// NullErrorHandler is an ErrorHandler implementation that logs the error to Stderr.
-type NullErrorHandler struct{}
+// nullErrorHandler is an ErrorHandler implementation that logs the error to Stderr.
+type nullErrorHandler struct{}
 
-// Notify implements the ErrorHandler Notify method.
-func (h *NullErrorHandler) Notify(err error) error {
+// Handle implements the ErrorHandler Notify method.
+func (h *nullErrorHandler) Handle(err error) error {
 	_, err2 := fmt.Fprintf(os.Stderr, "%v\n", err)
 	return err2
 }
+
+var DefaultErrorHandler = ErrorHandler(&nullErrorHandler{})
 
 // Handler is an interface that can be implemented for handling messages for
 // processing.
@@ -94,8 +96,20 @@ type Worker struct {
 	id string
 }
 
+type Options struct {
+	ErrorHandler ErrorHandler
+}
+
+var DefaultOptions = &Options{
+	ErrorHandler: DefaultErrorHandler,
+}
+
 // NewWorker returns a new Worker.
-func NewWorker(q Queue, h Handler, eh ErrorHandler) *Worker {
+func NewWorker(q Queue, h Handler, o *Options) *Worker {
+	if o == nil {
+		o = DefaultOptions
+	}
+
 	id := uuid.New()
 	l := log.New(os.Stdout, fmt.Sprintf("[worker] handler=%s id=%s ", h.Name(), id), 0)
 
@@ -103,7 +117,7 @@ func NewWorker(q Queue, h Handler, eh ErrorHandler) *Worker {
 		Logger:       l,
 		Queue:        q,
 		Handler:      h,
-		ErrorHandler: eh,
+		ErrorHandler: o.ErrorHandler,
 		id:           id,
 	}
 }
@@ -119,7 +133,7 @@ func (w *Worker) Start(shutdown chan interface{}) {
 		select {
 		case m := <-mm:
 			t := metrics.Time("message.handle")
-			w.Handler.Handle(newMessage(m))
+			w.HandleMessage(newMessage(m))
 			t.Done()
 		case <-shutdown:
 			w.Logger.Printf("at=close sigterm received, attempting to shut down gracefully\n")
@@ -136,8 +150,12 @@ func (w *Worker) Start(shutdown chan interface{}) {
 	}
 }
 
+func (w *Worker) HandleMessage(m *Message) {
+	w.Handler.Handle(m)
+}
+
 func (w *Worker) HandleError(err error) error {
-	return w.ErrorHandler.Notify(err)
+	return w.ErrorHandler.Handle(err)
 }
 
 func newMessage(m *amqp.Message) *Message {
