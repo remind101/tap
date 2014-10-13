@@ -11,10 +11,21 @@ import (
 	"github.com/remind101/metrics"
 )
 
-var (
-	// Errors is called when there are unhandled errors.
-	Errors = ErrorHandler(&NullErrorHandler{})
-)
+// ErrorHandler is an interface for draining errors to an exceptions aggregator.
+type ErrorHandler interface {
+	Handle(error) error
+}
+
+// nullErrorHandler is an ErrorHandler implementation that logs the error to Stderr.
+type nullErrorHandler struct{}
+
+// Handle implements the ErrorHandler Notify method.
+func (h *nullErrorHandler) Handle(err error) error {
+	_, err2 := fmt.Fprintf(os.Stderr, "%v\n", err)
+	return err2
+}
+
+var DefaultErrorHandler = ErrorHandler(&nullErrorHandler{})
 
 // Handler is an interface that can be implemented for handling messages for
 // processing.
@@ -40,10 +51,10 @@ type Queue interface {
 type Message struct {
 	amqp.Acknowledger
 
-	// The event embedded in this message.
+	// The body embedded in this message.
 	Body []byte
 
-	// The request id associated with this event.
+	// The request id associated with this message.
 	RequestID string
 }
 
@@ -77,23 +88,37 @@ func (a *Acknowledger) Nack(requeue bool) error {
 
 // Worker consumes messages off of the queue and hands them off to a handler.
 type Worker struct {
-	Logger  *log.Logger
-	Queue   Queue
-	Handler Handler
+	Logger       *log.Logger
+	Queue        Queue
+	Handler      Handler
+	ErrorHandler ErrorHandler
 
 	id string
 }
 
+type Options struct {
+	ErrorHandler ErrorHandler
+}
+
+var DefaultOptions = &Options{
+	ErrorHandler: DefaultErrorHandler,
+}
+
 // NewWorker returns a new Worker.
-func NewWorker(q Queue, h Handler) *Worker {
+func NewWorker(q Queue, h Handler, o *Options) *Worker {
+	if o == nil {
+		o = DefaultOptions
+	}
+
 	id := uuid.New()
 	l := log.New(os.Stdout, fmt.Sprintf("[worker] handler=%s id=%s ", h.Name(), id), 0)
 
 	return &Worker{
-		Logger:  l,
-		Queue:   q,
-		Handler: h,
-		id:      id,
+		Logger:       l,
+		Queue:        q,
+		Handler:      h,
+		ErrorHandler: o.ErrorHandler,
+		id:           id,
 	}
 }
 
@@ -108,21 +133,29 @@ func (w *Worker) Start(shutdown chan interface{}) {
 		select {
 		case m := <-mm:
 			t := metrics.Time("message.handle")
-			w.Handler.Handle(newMessage(m))
+			w.HandleMessage(newMessage(m))
 			t.Done()
 		case <-shutdown:
 			w.Logger.Printf("at=close sigterm received, attempting to shut down gracefully\n")
 			if err := w.Queue.Close(); err != nil {
-				NotifyError(err)
+				w.HandleError(err)
 			}
 
 			if err := w.Handler.Stop(); err != nil {
-				NotifyError(err)
+				w.HandleError(err)
 			}
 
 			return
 		}
 	}
+}
+
+func (w *Worker) HandleMessage(m *Message) {
+	w.Handler.Handle(m)
+}
+
+func (w *Worker) HandleError(err error) error {
+	return w.ErrorHandler.Handle(err)
 }
 
 func newMessage(m *amqp.Message) *Message {
@@ -138,9 +171,4 @@ func newMessage(m *amqp.Message) *Message {
 		Body:         m.Body,
 		RequestID:    requestID,
 	}
-}
-
-// NotifyError can be called by handlers to drain an error to the error handler.
-func NotifyError(v interface{}) error {
-	return Errors.Notify(v)
 }
